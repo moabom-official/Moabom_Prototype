@@ -19,6 +19,7 @@ from video_selection_agent.graph.nodes import (
     generate_rationale,
     llm_rerank,
     score_quantitative,
+    scope_filter,
 )
 from video_selection_agent.graph.state import SelectionState
 
@@ -76,6 +77,7 @@ def build_graph() -> Any:
     graph.add_node("score_quantitative", score_quantitative)
     graph.add_node("diversity_filter", diversity_filter)
     graph.add_node("relax_constraints", relax_constraints)
+    graph.add_node("scope_filter", scope_filter)
     graph.add_node("llm_rerank", llm_rerank)
     graph.add_node("finalize_selection", finalize_selection)
     graph.add_node("generate_rationale", generate_rationale)
@@ -91,9 +93,10 @@ def build_graph() -> Any:
     graph.add_conditional_edges(
         "diversity_filter",
         _route_after_diversity,
-        {"relax": "relax_constraints", "llm_rerank": "llm_rerank"},
+        {"relax": "relax_constraints", "llm_rerank": "scope_filter"},
     )
     graph.add_edge("relax_constraints", "score_quantitative")
+    graph.add_edge("scope_filter", "llm_rerank")
     graph.add_edge("llm_rerank", "finalize_selection")
     graph.add_edge("finalize_selection", "generate_rationale")
     graph.add_edge("generate_rationale", END)
@@ -121,6 +124,7 @@ class _FallbackLinearGraph:
             state = score_quantitative(state)  # type: ignore[assignment]
             state = diversity_filter(state)  # type: ignore[assignment]
 
+        state = scope_filter(state)  # type: ignore[assignment]
         state = llm_rerank(state)  # type: ignore[assignment]
         state = finalize_selection(state)  # type: ignore[assignment]
         state = generate_rationale(state)  # type: ignore[assignment]

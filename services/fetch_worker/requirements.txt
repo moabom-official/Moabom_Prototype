@@ -2,3 +2,9 @@ fastapi==0.115.0
 uvicorn[standard]==0.32.0
 yt-dlp==2026.3.17
 requests==2.33.1
+# scope classifier (GPU inference, desktop worker only)
+torch>=2.4
+transformers>=4.45,<5
+accelerate>=0.34
+# scope-classifier package providing build_input_text — install in editable mode:
+#   pip install -e ~/projects/scope-classifier

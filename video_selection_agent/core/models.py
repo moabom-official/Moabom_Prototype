@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 
@@ -58,6 +58,11 @@ class ScoreBreakdown:
     llm_rationale_short: str = ""
     llm_rationale_full: str = ""
     selection_reasons: list[str] = field(default_factory=list)
+    # Auxiliary signals attached by downstream nodes (e.g., scope_filter writes
+    # scope_label/scope_confidence/scope_latency_ms here). Persisted by merging
+    # into `dimensions_json` at save time — kept separate to preserve the
+    # numeric-only contract of `dimensions`.
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

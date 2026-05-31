@@ -275,7 +275,11 @@ def register_selection_routes(app: FastAPI) -> None:
         all_scores = {
             vid: {
                 "final_score": float(sb.final_score),
-                "dimensions": sb.dimensions,
+                # Merge ScoreBreakdown.extras (e.g. scope_label/scope_confidence
+                # from scope_filter node) into dimensions_json. Keeps the JSONB
+                # column the single source of per-video auxiliary signals
+                # without a schema change.
+                "dimensions": {**sb.dimensions, **sb.extras},
                 "tier": sb.tier,
                 "rank": sb.rank,
                 "rationale_short": sb.llm_rationale_short,
