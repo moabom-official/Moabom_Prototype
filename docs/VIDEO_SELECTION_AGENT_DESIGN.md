@@ -1,6 +1,8 @@
 # FR-005 분석 대상 영상 선택 — LangGraph 기반 구현 계획
 
-> **상태**: Phase-3 완료 (2026-04). 본 문서는 구현 전 작성된 설계안이며, 아래 "Context" / "현재 상태" 섹션은 **착수 시점 진단**임. 실제 구현은 [video_selection_agent/README.md](../video_selection_agent/README.md) 참조.
+> **상태**: Phase-3 완료 (2026-04) + **scope_filter 통합 (2026-06)**. 본 문서는 구현 전 작성된 설계안이며, 아래 "Context" / "현재 상태" 섹션은 **착수 시점 진단**임. 실제 구현은 [video_selection_agent/README.md](../video_selection_agent/README.md) 참조.
+>
+> **2026-06 추가**: `diversity_filter` 와 `llm_rerank` 사이에 `scope_filter` 노드 신설 — "여러 제품 비교/랭킹 영상"을 후보에서 제외(피드백 ②). 데스크탑 GPU 워커(`services/fetch_worker` `/scope-classify`)의 klue/roberta-large 분류기 호출. 상세: 본 문서 "비교영상 필터링" 섹션 + [video_selection_agent/README.md](../video_selection_agent/README.md).
 
 ## Context
 
@@ -63,7 +65,8 @@ video_selection_agent/
 │       ├── enrich_metadata.py   # videos.list + channels.list 보강
 │       ├── score_quantitative.py# 결정적 점수 (LLM 미사용)
 │       ├── diversity_filter.py  # 채널 상한, 티어 쿼터
-│       ├── llm_rerank.py        # Azure GPT-4.1-mini 1회 호출: topical_fit + 짧은 rationale
+│       ├── scope_filter.py      # (2026-06) 비교영상 분류 → label=1 & conf≥0.7 → rank=-1 제외
+│       ├── llm_rerank.py        # LLM 1회 호출: topical_fit + 짧은 rationale
 │       ├── finalize_selection.py# top-k 선정 (min 3, max 10)
 │       └── generate_rationale.py# Azure GPT-4.1-mini 1회 호출: 선정작 2~3문장 rationale
 ├── scoring/
@@ -141,6 +144,7 @@ graph TD;
 	score_quantitative(score_quantitative)
 	diversity_filter(diversity_filter)
 	relax_constraints(relax_constraints)
+	scope_filter(scope_filter)
 	llm_rerank(llm_rerank)
 	finalize_selection(finalize_selection)
 	generate_rationale(generate_rationale)
@@ -151,7 +155,8 @@ graph TD;
 	enrich_metadata --> score_quantitative;
 	score_quantitative --> diversity_filter;
 	diversity_filter -. relax .-> relax_constraints;
-	diversity_filter -.-> llm_rerank;
+	diversity_filter -.-> scope_filter;
+	scope_filter --> llm_rerank;
 	relax_constraints --> score_quantitative;
 	llm_rerank --> finalize_selection;
 	finalize_selection --> generate_rationale;
@@ -230,6 +235,26 @@ class ScoreBreakdown:
    - `"{product} 리뷰"`, `"{product} review"`, `"{product} 단점"`, `"{brand} {product}"` 4종 병렬 → 중복 제거 → 25~50건.
    - "단점" 쿼리로 비판적 관점 시드.
 5. **관점 다양성 근사**: 제목 키워드(`단점/실망/후회/비추` vs `최고/추천/완벽`)로 coarse tag 부여, 풀에 ≥3개 있으면 비홍보 제목 최소 1개 강제. 진짜 관점 다양성(댓글 감성 믹스)은 **FR-010/011 단계로 이월** (TODO 주석 명시).
+
+## 비교영상 필터링 — scope_filter (2026-06 추가)
+
+`diversity_filter` 직후, `llm_rerank` 직전에 실행. "여러 제품 비교/랭킹 영상"(피드백 ②)을 후보에서 제외해 영상별·종합 보고서 노이즈를 줄인다.
+
+**아키텍처**: 추론은 데스크탑 GPU 워커가 담당하고 본 에이전트는 HTTP 클라이언트만 둔다 (운영 머신엔 GPU 없음 + 학습/전처리 코드를 운영 repo 와 분리해 train-serving skew 방지).
+
+- 워커: [services/fetch_worker](../services/fetch_worker) 의 `POST /scope-classify` — klue/roberta-large (bf16, 자취방 RTX 4060 Ti). 전처리 `build_input_text` 는 별 repo [scope-classifier](https://github.com/moabom-official/scope-classifier) 에서 import. Tailscale Funnel + Bearer (transcript 워커와 동일 인증·서빙 인프라 재사용). 서빙 프레임워크(vLLM/Triton) 없이 FastAPI + transformers 직접 호출 — 단발 forward pass 분류라 동적 배칭 불필요.
+- 클라이언트: [video_selection_agent/scope_filter/client.py](../video_selection_agent/scope_filter/client.py) — requests + Bearer + 3회 지수 백오프. 실패 시 `None`.
+- 노드: [video_selection_agent/graph/nodes/scope_filter.py](../video_selection_agent/graph/nodes/scope_filter.py). `rank > 0` 후보만 분류 대상. `label == 1 & confidence ≥ SCOPE_MIN_CONFIDENCE(기본 0.7)` → `rank = -1`.
+
+**rank=-1 설계 (핵심)**: `finalize_selection` 의 부족분 fallback 은 `rank == 0` 후보만 부활시키므로(본 문서 finalize 설명 참조), scope 차단(rank=-1)은 마이너 제품의 부족분 보충에도 **절대 부활하지 않는다** — finalize 코드 수정 0.
+
+**fail-safe**: `SCOPE_WORKER_URL` 미설정 / 워커 502·timeout → 모든 후보 통과(pass-through) + trace 기록. `SCOPE_FILTER_ENABLED=0` kill switch.
+
+**저장**: 분류 결과(`scope_label / scope_confidence / scope_latency_ms`)는 `ScoreBreakdown.extras` 에 담겨 `dimensions_json` JSONB 에 merge (schema 변경 0).
+
+**분류 정의 (v1 binary)**: `label=1` = 2개 이상 제품 동시 비교(셀프·모델 비교 포함), `label=0` = 그 외(단일 제품 리뷰·언박싱·뉴스·랭킹). roundup/news/unboxing 세분류는 v2 이슈.
+
+**검증 (아이폰 17, k=5, pool 50)**: `scope_filter: 26 classified, 10 blocked` — 비교영상 차단, 선정 5개 전부 단독 리뷰. confidence<0.7 경계 케이스는 보존. 회귀 안전망: [regression/tests/test_scope_filter.py](../regression/tests/test_scope_filter.py) 5종 (offline mock).
 
 ## 데이터 모델 변경 ([scripts/database/schema.py](../scripts/database/schema.py))
 

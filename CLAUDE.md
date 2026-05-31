@@ -28,7 +28,7 @@
   - 환경변수: `RUNYOURAI_API_KEY` (Container App secret `runyourai-key`) / `RUNYOURAI_BASE_URL` (default `https://api.runyour.ai/v1`) / `RUNYOURAI_MODEL`
   - 호출 경로: `langchain-openai`(`ChatOpenAI` + `base_url`, OpenAI 호환 endpoint). 단일 진입점 `scripts/llm/__init__.py:get_chat_llm()`
   - PR #15에서 Azure OpenAI → RunYourAI 통합 게이트웨이로 이관 (Azure 잔존 클라이언트는 `video_selection_agent/llm/azure_openai_client.py` 파일명만 유지하고 내부는 RunYourAI 호출)
-- 에이전틱 워크플로우: **LangGraph** (`video_selection_agent/graph/`, FR-005 영상 선택 StateGraph). 영상 선정 Agent 7-step (fetch_candidate → enrich_metadata → score_quantitative 6차원 가중합 → 다양성 필터 → LLM Re-rank → finalize_selection → generate_rationale)
+- 에이전틱 워크플로우: **LangGraph** (`video_selection_agent/graph/`, FR-005 영상 선택 StateGraph). 영상 선정 Agent 8-step (fetch_candidate → enrich_metadata → score_quantitative 6차원 가중합 → 다양성 필터 → **scope_filter(비교영상 제외)** → LLM Re-rank → finalize_selection → generate_rationale). scope_filter 는 데스크탑 GPU 워커(`services/fetch_worker` `/scope-classify`, klue/roberta-large)를 HTTP 호출해 "여러 제품 비교/랭킹 영상"을 후보에서 제외(피드백 ②). label=1 & conf≥0.7 → rank=-1(finalize fallback 으로도 부활 불가). 학습/전처리는 별 repo scope-classifier. 워커 부재 시 pass-through, `SCOPE_FILTER_ENABLED=0` kill switch.
 - 댓글 필터링 Agent 7-step: 수집 → 전처리 → Rule Soft Filter(12종) → 후보 가공 Top 300 → Multi-Criteria 6기준 선정 → LLM 5-class 분류 → Agent Decision Engine + ABSA 감성 분석. 영상 단위 **ThreadPoolExecutor 병렬 처리**.
 - PDF 출력: **ReportLab** (한글 폰트 적용)
 - 인프라/배포: **Azure Container Apps** (`rg-moabom` / `cae-moabom` / `ca-moabom`, FastAPI Port 8000, **CPU 1.0 / Mem 2Gi, min=2 / max=5 replicas**) + **Azure PostgreSQL Flexible Server** (**Standard_B2s, 2 vCPU / 4GB, max_connections=200**, db: `techdb`, sslmode=require) + **Azure Container Registry** (`moabom-app:tag`) + **Azure Log Analytics** (30일 보존). Docker · docker-compose 로컬 개발. 2026-05-14 v1 사용자 설문 배포 대응으로 상향 (이전 0.5/1Gi · min=1/max=1 · B1ms).
@@ -55,7 +55,7 @@ scripts/                      # 운영 본체 (api / database / youtube / analys
 comment_filtering_agent/      # 댓글 7-step 필터 Agent (filters / classifiers / analyzers / core)
 video_selection_agent/        # 영상 선정 LangGraph Agent (graph / scoring / youtube / llm / persistence / api)
 regression/                   # 보고서 양식 회귀 안전망 (Phase 0, pytest · requirements-dev.txt)
-services/fetch_worker/        # 홈서버 자막 fetch worker (운영 — 실험 아님)
+services/fetch_worker/        # 홈서버 워커 (운영): /transcript 자막 fetch + /scope-classify 비교영상 GPU 분류
 app/  dags/  llm/             # 병렬 리팩터링·실험 모듈 (운영 미연결)
 templates/                    # Jinja2 HTML
 docs/                         # 과제 기획서, 요구사항명세서, 설계 문서, 중간 산출물
