@@ -244,7 +244,7 @@ class ScoreBreakdown:
 
 - 워커: [services/fetch_worker](../services/fetch_worker) 의 `POST /scope-classify` — klue/roberta-large (bf16, 자취방 RTX 4060 Ti). 전처리 `build_input_text` 는 별 repo [scope-classifier](https://github.com/moabom-official/scope-classifier) 에서 import. Tailscale Funnel + Bearer (transcript 워커와 동일 인증·서빙 인프라 재사용). 서빙 프레임워크(vLLM/Triton) 없이 FastAPI + transformers 직접 호출 — 단발 forward pass 분류라 동적 배칭 불필요.
 - 클라이언트: [video_selection_agent/scope_filter/client.py](../video_selection_agent/scope_filter/client.py) — requests + Bearer + 3회 지수 백오프. 실패 시 `None`.
-- 노드: [video_selection_agent/graph/nodes/scope_filter.py](../video_selection_agent/graph/nodes/scope_filter.py). `rank > 0` 후보만 분류 대상. `label == 1 & confidence ≥ SCOPE_MIN_CONFIDENCE(기본 0.7)` → `rank = -1`.
+- 노드: [video_selection_agent/graph/nodes/scope_filter.py](../video_selection_agent/graph/nodes/scope_filter.py). `rank > 0` 후보만 분류 대상. **`label == 1`(비교영상) 이고 `confidence ≥ SCOPE_MIN_CONFIDENCE`(기본 0.7) 일 때만** `rank = -1` 로 제외. confidence 가 0.7 미만이면 비교영상으로 분류돼도 통과시켜, 애매한 분류로 좋은 단독 리뷰가 잘리는 것을 막는다 (임계 미만 false positive 방어). 임계값은 `SCOPE_MIN_CONFIDENCE` 환경변수로 조정.
 
 **rank=-1 설계 (핵심)**: `finalize_selection` 의 부족분 fallback 은 `rank == 0` 후보만 부활시키므로(본 문서 finalize 설명 참조), scope 차단(rank=-1)은 마이너 제품의 부족분 보충에도 **절대 부활하지 않는다** — finalize 코드 수정 0.
 

@@ -132,7 +132,7 @@ LLM 미설정 시 자동 graceful degradation: rerank 실패 → 정량 점수�
 
 - 워커: `services/fetch_worker` 의 `POST /scope-classify` (klue/roberta-large, bf16, residential GPU). 전처리 `build_input_text` 는 [scope-classifier](https://github.com/moabom-official/scope-classifier) 에서 import → train-serving skew 방지.
 - 클라이언트: [scope_filter/client.py](scope_filter/client.py) — requests + Bearer + 3회 지수 백오프. 실패 시 `None` → 노드가 pass-through.
-- 차단 로직: `label == 1`(비교영상) 이고 `confidence ≥ SCOPE_MIN_CONFIDENCE` 면 `rank = -1` 로 마킹. `finalize_selection` 의 fallback 은 `rank == 0` 만 부활시키므로 **rank=-1 은 영구 제외** (finalize 코드 수정 없음).
+- 차단 로직: `label == 1`(비교영상) **이고** `confidence ≥ SCOPE_MIN_CONFIDENCE`(**기본 0.7**) 일 때만 `rank = -1` 로 마킹해 제외한다. 비교영상으로 분류돼도 **confidence 가 0.7 미만이면 통과**(애매한 케이스의 false positive 로 좋은 단독 리뷰가 잘려나가는 것을 막는 안전장치). `finalize_selection` 의 fallback 은 `rank == 0` 만 부활시키므로 **rank=-1 은 영구 제외** (finalize 코드 수정 없음). 임계값은 `SCOPE_MIN_CONFIDENCE` 로 조정 (운영 traffic 분포 보고 재튜닝 가능).
 - 결과는 `ScoreBreakdown.extras` 에 `scope_label / scope_confidence / scope_latency_ms` 기록 → DB 저장 시 `dimensions_json` 에 merge (schema 변경 0).
 - 분류 정의: `label=1` = 2개 이상 제품 동시 비교(셀프·모델 비교 포함), `label=0` = 그 외(단일 제품 리뷰·언박싱·뉴스·랭킹). v1 binary.
 
